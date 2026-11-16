@@ -145,6 +145,12 @@ select.field{padding-right:6px}
 .slot-wrap{position:relative; min-width:0}
 .slot{width:100%; height:100%; min-height:60px; text-align:left; padding:9px 11px; border-radius:var(--r,10px); border:1.5px dashed var(--line); background:transparent; color:var(--muted); display:flex; flex-direction:column; gap:3px; min-width:0}
 .slot:hover{background:var(--soft)}
+.slot.filled{-webkit-user-select:none; user-select:none; -webkit-touch-callout:none}
+.slot.lift{opacity:.35}
+.slot.drop{border:2px solid var(--brand)!important; background:var(--soft)!important}
+.dragghost{position:fixed; z-index:60; pointer-events:none; padding:9px 12px; border-radius:var(--r,10px); background:var(--surface); color:var(--ink); border:2px solid var(--brand); box-shadow:0 10px 28px rgba(0,0,0,.25); font-weight:600; font-size:14px; max-width:180px; transform:translate(-50%,-120%) rotate(-2deg)}
+.draghint{font-size:13px; margin-top:10px}
+body.dragging{-webkit-user-select:none; user-select:none}
 .slot.filled{border:1px solid var(--line); background:var(--surface); color:var(--ink); padding-right:30px}
 .when{font-family:var(--f-mono); font-size:10.5px; letter-spacing:.09em; text-transform:uppercase; color:var(--muted)}
 .what{font-weight:500; font-size:14px; line-height:1.25; overflow-wrap:anywhere}
@@ -289,6 +295,7 @@ it:{
   pickAria:'Scegli la ricetta', recipeAria:'Ricetta', copyAria:'Copia la lista', close:'Chiudi', search:'Cerca una ricetta', noMatch:'Nessuna ricetta con questo nome.', bookEmpty:'Il ricettario è ancora vuoto.', notInList:'non entra nella lista della spesa',
   themeBtn:'Tema', themeTitle:'Scegli il tema', themeHelp:'Il tema vale solo per questo telefono.',
   th:{auto:'Automatico',light:'Chiaro',dark:'Scuro',pink:'Rosa',ocean:'Mare',midnight:'Notte'},
+  dragHint:'Tieni premuto un pasto e trascinalo per spostarlo. Su un pasto già pieno, i due si scambiano.', moved:'Pasto spostato', swapped:'Pasti scambiati', recDeleted:'Ricetta eliminata', delInPlan:n=>'È nel piano di questa settimana ('+n+'×): verrà tolta anche da lì.',
   viewRecipe:'Vedi la ricetta', editBtn:'Modifica', stepsLbl:'Preparazione', stepsPh:'Un passaggio per riga', sourceLbl:'Fonte',
   noSteps:'Nessuna preparazione scritta. Tocca Modifica per aggiungerla.',
   importShort:'Importa', importBtn:'Importa da link o testo', importTitle:'Importa una ricetta',
@@ -344,6 +351,7 @@ en:{
   pickAria:'Choose a recipe', recipeAria:'Recipe', copyAria:'Copy the list', close:'Close', search:'Search recipes', noMatch:'No recipe with that name.', bookEmpty:'The recipe book is still empty.', notInList:'not added to the shopping list',
   themeBtn:'Theme', themeTitle:'Choose a theme', themeHelp:'The theme applies to this phone only.',
   th:{auto:'Automatic',light:'Light',dark:'Dark',pink:'Pink',ocean:'Ocean',midnight:'Midnight'},
+  dragHint:'Press and hold a meal, then drag it to move it. Drop it on a filled meal to swap the two.', moved:'Meal moved', swapped:'Meals swapped', recDeleted:'Recipe deleted', delInPlan:n=>"It's in this week's plan ("+n+'×): it will be removed from there too.',
   viewRecipe:'View recipe', editBtn:'Edit', stepsLbl:'Method', stepsPh:'One step per line', sourceLbl:'Source',
   noSteps:'No method written yet. Tap Edit to add it.',
   importShort:'Import', importBtn:'Import from link or text', importTitle:'Import a recipe',
@@ -463,7 +471,7 @@ const S={
   db:null, local:false, persist:false, dbState:'pending', slow:false, recipesLoaded:false, weekLoaded:false,
   recipes:[], weekId:defaultWeekId(), week:blankWeek(2),
   view:'piano', picker:null, editor:null, copy:null, confirmEx:false,
-  viewer:null, importer:null, themes:false,
+  viewer:null, importer:null, themes:false, viewerDel:false,
   settings:false, sync:null, syncState:'off', syncMsg:'', syncBusy:false, lastSync:null, confirmOff:false, draftUrl:'', draftCode:''
 };
 function blankWeek(people){return {people:people||2,slots:{},checked:{},extras:[]}}
@@ -689,6 +697,7 @@ function renderPiano(){
     (loading?loadingBlock():
       (S.recipes.length?'':'<div class="empty"><h2>'+t('emptyBookTitle')+'</h2><p>'+t('emptyBookText')+'</p><button type="button" class="btn primary" data-act="recipe-new">'+t('createFirst')+'</button></div>')+
       '<ul class="days">'+rows+'</ul>'+
+      (Object.keys(S.week.slots).length?'<p class="muted draghint">'+t('dragHint')+'</p>':'')+
       '<div class="cta"><button type="button" class="btn primary" data-act="go" data-to="spesa"'+(all.length?'':' disabled')+'>'+t('shopBtn',all.length)+'</button>'+
       (all.length?'':'<span class="muted">'+t('pickOne')+'</span>')+
       (all.length&&left<all.length?'<span class="muted mono">'+t('ticked',all.length-left)+'</span>':'')+'</div>');
@@ -747,7 +756,7 @@ function renderOverlay(){
   const f=o.querySelector(S.picker?'#pick-q':S.editor&&!S.editor.id&&!S.editor.name?'#rec-name':S.copy?'#copy-t':null);
   if(f){ f.focus(); if(S.copy) f.select(); }
 }
-function closeOverlay(){ S.picker=null; S.editor=null; S.viewer=null; S.importer=null; S.themes=false; S.copy=null; S.settings=false; S.confirmOff=false; S.syncMsg=''; renderOverlay(); }
+function closeOverlay(){ S.viewerDel=false; S.picker=null; S.editor=null; S.viewer=null; S.importer=null; S.themes=false; S.copy=null; S.settings=false; S.confirmOff=false; S.syncMsg=''; renderOverlay(); }
 
 function slotTitle(slot){
   const p=slot.split('-'), d=addDays(parseId(S.weekId),+p[0]);
@@ -1088,8 +1097,9 @@ function viewerHTML(){
     '<div class="lbl">'+t('ingredients')+'</div><ul class="vings">'+ings+'</ul>'+
     '<div class="lbl" style="margin-top:18px">'+t('stepsLbl')+'</div>'+
     (st.length?'<ol class="vsteps">'+st.map(x=>'<li><span>'+esc(x)+'</span></li>').join('')+'</ol>':'<p class="muted" style="margin-top:6px">'+t('noSteps')+'</p>')+
-    (r.source?'<p class="muted src">'+esc(t('sourceLbl'))+': '+esc(r.source)+'</p>':'')+'</div>'+
-    '<div class="sheet-foot"><button type="button" class="btn" data-act="close">'+t('close')+'</button><button type="button" class="btn primary" data-act="recipe-edit" data-id="'+esc(r.id)+'">'+t('editBtn')+'</button></div>';
+    (r.source?'<p class="muted src">'+esc(t('sourceLbl'))+': '+esc(r.source)+'</p>':'')+(S.viewerDel&&usesOf(r.id)?'<p class="err" role="alert">'+esc(t('delInPlan',usesOf(r.id)))+'</p>':'')+'</div>'+
+    '<div class="sheet-foot"><button type="button" class="btn danger grow" data-act="viewer-del" data-id="'+esc(r.id)+'">'+(S.viewerDel?t('delYes'):t('del'))+'</button>'+
+    (S.viewerDel?'<button type="button" class="btn" data-act="viewer-del-no">'+t('cancel')+'</button>':'<button type="button" class="btn" data-act="close">'+t('close')+'</button><button type="button" class="btn primary" data-act="recipe-edit" data-id="'+esc(r.id)+'">'+t('editBtn')+'</button>')+'</div>';
 }
 function pickViewBtn(){
   const c=S.week.slots[S.picker.slot];
@@ -1144,11 +1154,15 @@ async function saveRecipe(){
 async function deleteRecipe(){
   syncEditor(); const e=S.editor; if(!e||!e.id) return;
   if(!e.confirmDelete){ e.confirmDelete=true; renderOverlay(); return; }
-  const id=e.id; let changed=false;
+  S.editor=null; await removeRecipe(e.id);
+}
+function usesOf(id){ return Object.values(S.week.slots).filter(v=>v===id).length; }
+async function removeRecipe(id){
+  let changed=false;
   for(const k of Object.keys(S.week.slots)) if(S.week.slots[k]===id){delete S.week.slots[k];changed=true}
   S.recipes=S.recipes.filter(r=>r.id!==id);
   if(changed) queueWeekSave();
-  S.editor=null; renderOverlay(); renderAll();
+  S.editor=null; S.viewer=null; S.viewerDel=false; renderOverlay(); renderAll(); toast(t('recDeleted'));
   if(S.db){ try{ await S.db.doc('recipes/'+id).delete(); }catch(err){ toast(t('delRecFail')); } }
   else { persistRecipes(); dropRecipe(id); }
 }
@@ -1430,12 +1444,14 @@ const ACT={
   close:()=>closeOverlay(),
   'recipe-new':b=>openEditor(null,b.dataset.assign),
   'recipe-edit':b=>openEditor(b.dataset.id),
-  'recipe-view':b=>{S.picker=null; S.viewer=b.dataset.id; renderOverlay()},
+  'recipe-view':b=>{S.picker=null; S.viewerDel=false; S.viewer=b.dataset.id; renderOverlay()},
   'import-open':()=>{S.editor=null; S.picker=null; S.viewer=null; S.importer={url:'',text:'',busy:false,msg:''}; renderOverlay()},
   'import-url':()=>importFromUrl(),
   'import-text':()=>importFromText(),
   'recipe-save':()=>saveRecipe(),
   'recipe-delete':()=>deleteRecipe(),
+  'viewer-del':b=>{ if(!S.viewerDel){ S.viewerDel=true; renderOverlay(); return; } removeRecipe(b.dataset.id); },
+  'viewer-del-no':()=>{ S.viewerDel=false; renderOverlay(); },
   'ing-add':()=>{syncEditor(); S.editor.ingredients.push({n:'',q:'',u:'g',a:'verdura',auto:true}); renderOverlay(); const i=S.editor.ingredients.length-1; const f=$('#ing-n-'+i); if(f) f.focus()},
   'ing-del':b=>{syncEditor(); S.editor.ingredients.splice(+b.dataset.i,1); if(!S.editor.ingredients.length) S.editor.ingredients.push({n:'',q:'',u:'g',a:'verdura',auto:true}); renderOverlay()},
   'copy-list':()=>copyList(),
@@ -1449,6 +1465,76 @@ const ACT={
   'sync-copy':()=>syncCopy(),
   'sync-now':async()=>{ await pollNow(); renderOverlay() }
 };
+/* ---------- trascinamento dei pasti nel piano (tieni premuto, poi trascina) ---------- */
+const DRAG={from:null,timer:null,x:0,y:0,on:false,ghost:null,over:null,pid:null,eatClick:false,raf:0,vy:0};
+function dragReset(){
+  clearTimeout(DRAG.timer); cancelAnimationFrame(DRAG.raf);
+  if(DRAG.ghost&&DRAG.ghost.parentNode) DRAG.ghost.parentNode.removeChild(DRAG.ghost);
+  document.querySelectorAll('.slot.lift,.slot.drop').forEach(x=>{x.classList.remove('lift');x.classList.remove('drop')});
+  if(document.body&&document.body.classList) document.body.classList.remove('dragging');
+  DRAG.from=null; DRAG.on=false; DRAG.ghost=null; DRAG.over=null; DRAG.pid=null; DRAG.vy=0;
+}
+function slotEl(key){ return document.querySelector('.slot[data-slot="'+key+'"]'); }
+function dragStart(){
+  const el=slotEl(DRAG.from); if(!el){ dragReset(); return; }
+  DRAG.on=true; el.classList.add('lift'); document.body.classList.add('dragging');
+  const g=document.createElement('div'); g.className='dragghost';
+  const v=S.week.slots[DRAG.from], r=recipeById(v); g.textContent=v===OUT?t('out'):r?r.name:'…';
+  document.body.appendChild(g); DRAG.ghost=g; dragMoveTo(DRAG.x,DRAG.y);
+  try{ if(navigator.vibrate) navigator.vibrate(25); }catch(e){}
+  const tick=()=>{ if(!DRAG.on) return; if(DRAG.vy) { window.scrollBy(0,DRAG.vy); dragMoveTo(DRAG.x,DRAG.y); } DRAG.raf=requestAnimationFrame(tick); };
+  DRAG.raf=requestAnimationFrame(tick);
+}
+function dragMoveTo(x,y){
+  DRAG.x=x; DRAG.y=y;
+  if(DRAG.ghost){ DRAG.ghost.style.left=x+'px'; DRAG.ghost.style.top=y+'px'; }
+  const h=window.innerHeight||800, edge=90;
+  DRAG.vy=y<edge?-Math.ceil((edge-y)/6):y>h-edge?Math.ceil((y-(h-edge))/6):0;
+  const hit=document.elementFromPoint(x,y), sl=hit&&hit.closest?hit.closest('.slot'):null;
+  const key=sl?sl.dataset.slot:null, over=key&&key!==DRAG.from?key:null;
+  if(over!==DRAG.over){
+    if(DRAG.over){ const o=slotEl(DRAG.over); if(o) o.classList.remove('drop'); }
+    if(over){ const o=slotEl(over); if(o) o.classList.add('drop'); }
+    DRAG.over=over;
+  }
+}
+function moveMeal(from,to){
+  const sl=S.week.slots, a=sl[from], b=sl[to];
+  if(!a||from===to) return;
+  sl[to]=a; if(b) sl[from]=b; else delete sl[from];
+  queueWeekSave(); renderAll(); toast(t(b?'swapped':'moved'));
+}
+function dragBegin(target,x,y,id,mouse){
+  if(S.view!=='piano'||overlayOpen()) return;
+  const sl=target&&target.closest&&target.closest('.slot.filled'); if(!sl) return;
+  dragReset(); DRAG.from=sl.dataset.slot; DRAG.x=DRAG.sx=x; DRAG.y=DRAG.sy=y; DRAG.pid=id; DRAG.mouse=mouse;
+  if(!mouse) DRAG.timer=setTimeout(dragStart,380);
+}
+function dragMove(x,y){
+  if(DRAG.on){ dragMoveTo(x,y); return true; }
+  const d=Math.hypot(x-DRAG.sx,y-DRAG.sy);
+  if(DRAG.mouse){ if(d>6){ DRAG.x=x; DRAG.y=y; dragStart(); return true; } }
+  else if(d>10) dragReset();
+  return false;
+}
+function dragEnd(cancel){
+  if(!DRAG.from) return;
+  const was=DRAG.on, from=DRAG.from, to=DRAG.over;
+  dragReset();
+  if(was){ DRAG.eatClick=true; setTimeout(()=>{DRAG.eatClick=false},400); if(!cancel&&to) moveMeal(from,to); }
+}
+/* dita: eventi touch (non vengono annullati quando parte lo scorrimento) */
+document.addEventListener('touchstart',e=>{ if(e.touches.length!==1){ dragEnd(true); return; } const p=e.touches[0]; dragBegin(e.target,p.clientX,p.clientY,'t',false); },{passive:true});
+document.addEventListener('touchmove',e=>{ if(!DRAG.from||DRAG.pid!=='t') return; const p=e.touches[0]; if(dragMove(p.clientX,p.clientY)&&e.cancelable) e.preventDefault(); },{passive:false});
+document.addEventListener('touchend',()=>{ if(DRAG.pid==='t') dragEnd(false); });
+document.addEventListener('touchcancel',()=>{ if(DRAG.pid==='t') dragEnd(true); });
+/* mouse */
+document.addEventListener('pointerdown',e=>{ if(e.pointerType==='mouse'&&e.button===0) dragBegin(e.target,e.clientX,e.clientY,'m',true); });
+document.addEventListener('pointermove',e=>{ if(DRAG.from&&DRAG.pid==='m'&&dragMove(e.clientX,e.clientY)) e.preventDefault(); });
+document.addEventListener('pointerup',e=>{ if(DRAG.pid==='m') dragEnd(false); });
+document.addEventListener('contextmenu',e=>{ if(DRAG.from) e.preventDefault(); });
+document.addEventListener('click',e=>{ if(DRAG.eatClick){ e.stopPropagation(); e.preventDefault(); DRAG.eatClick=false; } },true);
+
 document.addEventListener('click',e=>{
   if(e.target.dataset&&e.target.dataset.scrim){ closeOverlay(); return; }
   const b=e.target.closest('[data-act]'); if(!b) return;
